@@ -8,6 +8,7 @@ import (
 
 	"github.com/rcaraher/nltl-video-gen/internal/config"
 	"github.com/rcaraher/nltl-video-gen/internal/ffmpeg"
+	"github.com/rcaraher/nltl-video-gen/internal/interactive"
 	"github.com/rcaraher/nltl-video-gen/internal/preset"
 	"github.com/rcaraher/nltl-video-gen/internal/profile"
 	"github.com/spf13/cobra"
@@ -26,77 +27,29 @@ func main() {
 	root := &cobra.Command{
 		Use:   "nltl-clip [audio] [image]",
 		Short: "Generate social media video clips from audio and a still image",
-		Args:  cobra.ExactArgs(2),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 || len(args) == 2 {
+				return nil
+			}
+			return fmt.Errorf("expected 0 args (interactive) or 2 args (audio image), got %d", len(args))
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			audioPath := args[0]
-			imagePath := args[1]
-
-			prof, ok := profile.Get(profileName)
-			if !ok {
-				return fmt.Errorf("unknown profile %q — try: %s",
-					profileName, strings.Join(profile.Names(), ", "))
-			}
-
-			var p preset.Preset
-			if configPath != "" {
-				cfg, err := config.Load(configPath)
+			if len(args) == 0 {
+				choices, err := interactive.Run()
 				if err != nil {
-					return fmt.Errorf("loading config: %w", err)
+					return err
 				}
-				if cp, found := cfg.GetPreset(presetName); found {
-					p = cp
-				} else if bp, found := preset.Get(presetName); found {
-					p = bp
-				} else {
-					return fmt.Errorf("preset %q not found in config or built-ins — built-ins: %s",
-						presetName, strings.Join(preset.Names(), ", "))
+				fmt.Println()
+				if err := renderClip(choices.AudioPath, choices.ImagePath,
+					choices.ProfileName, choices.PresetName,
+					choices.BPM, false, "", ""); err != nil {
+					return err
 				}
-			} else {
-				var found bool
-				p, found = preset.Get(presetName)
-				if !found {
-					return fmt.Errorf("unknown preset %q — try: %s",
-						presetName, strings.Join(preset.Names(), ", "))
-				}
+				fmt.Printf("\nTo run this again without prompts:\n  %s\n", choices.HeadlessCommand())
+				return nil
 			}
 
-			duration, err := ffmpeg.GetDuration(audioPath)
-			if err != nil {
-				return fmt.Errorf("reading audio duration: %w", err)
-			}
-
-			base := strings.TrimSuffix(filepath.Base(audioPath), filepath.Ext(audioPath))
-			outDir := outputDir
-			if outDir == "" {
-				outDir = filepath.Dir(audioPath)
-			}
-
-			suffix := prof.Suffix
-			if preview {
-				suffix += "_preview"
-			}
-			outputPath := filepath.Join(outDir, fmt.Sprintf("%s_%s.mp4", base, suffix))
-
-			filter := p.BuildFilter(prof.Width, prof.Height, bpm)
-
-			fmt.Printf("Profile:  %s (%dx%d)\n", prof.Name, prof.Width, prof.Height)
-			fmt.Printf("Preset:   %s — %s\n", p.Name, p.Description)
-			if bpm > 0 {
-				fmt.Printf("BPM:      %d\n", bpm)
-			}
-			if preview {
-				fmt.Printf("Preview:  10s low-quality render\n")
-			}
-			fmt.Printf("Output:   %s\n\n", outputPath)
-
-			return ffmpeg.Render(ffmpeg.Options{
-				ImagePath:  imagePath,
-				AudioPath:  audioPath,
-				OutputPath: outputPath,
-				Filter:     filter,
-				Duration:   duration,
-				Preview:    preview,
-			})
+			return renderClip(args[0], args[1], profileName, presetName, bpm, preview, outputDir, configPath)
 		},
 	}
 
@@ -114,6 +67,73 @@ func main() {
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func renderClip(audioPath, imagePath, profileName, presetName string, bpm int, preview bool, outputDir, configPath string) error {
+	prof, ok := profile.Get(profileName)
+	if !ok {
+		return fmt.Errorf("unknown profile %q — try: %s", profileName, strings.Join(profile.Names(), ", "))
+	}
+
+	var p preset.Preset
+	if configPath != "" {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		if cp, found := cfg.GetPreset(presetName); found {
+			p = cp
+		} else if bp, found := preset.Get(presetName); found {
+			p = bp
+		} else {
+			return fmt.Errorf("preset %q not found in config or built-ins — built-ins: %s",
+				presetName, strings.Join(preset.Names(), ", "))
+		}
+	} else {
+		var found bool
+		p, found = preset.Get(presetName)
+		if !found {
+			return fmt.Errorf("unknown preset %q — try: %s", presetName, strings.Join(preset.Names(), ", "))
+		}
+	}
+
+	duration, err := ffmpeg.GetDuration(audioPath)
+	if err != nil {
+		return fmt.Errorf("reading audio duration: %w", err)
+	}
+
+	base := strings.TrimSuffix(filepath.Base(audioPath), filepath.Ext(audioPath))
+	outDir := outputDir
+	if outDir == "" {
+		outDir = filepath.Dir(audioPath)
+	}
+
+	suffix := prof.Suffix
+	if preview {
+		suffix += "_preview"
+	}
+	outputPath := filepath.Join(outDir, fmt.Sprintf("%s_%s.mp4", base, suffix))
+
+	filter := p.BuildFilter(prof.Width, prof.Height, bpm)
+
+	fmt.Printf("Profile:  %s (%dx%d)\n", prof.Name, prof.Width, prof.Height)
+	fmt.Printf("Preset:   %s — %s\n", p.Name, p.Description)
+	if bpm > 0 {
+		fmt.Printf("BPM:      %d\n", bpm)
+	}
+	if preview {
+		fmt.Printf("Preview:  10s low-quality render\n")
+	}
+	fmt.Printf("Output:   %s\n\n", outputPath)
+
+	return ffmpeg.Render(ffmpeg.Options{
+		ImagePath:  imagePath,
+		AudioPath:  audioPath,
+		OutputPath: outputPath,
+		Filter:     filter,
+		Duration:   duration,
+		Preview:    preview,
+	})
 }
 
 func presetsCmd() *cobra.Command {
