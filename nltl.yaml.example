@@ -1,0 +1,21 @@
+# nltl-clip custom preset config
+# Usage: nltl-clip --config nltl.yaml --preset my-preset audio.wav cover.jpg
+#
+# All fields are optional — omit any to get the zero value.
+# Built-in presets (industrial, clean, dark) are always available
+# without a config file.
+
+presets:
+  - name: my-preset
+    description: Custom preset for NLTL releases
+    zoom_base: 1.02          # base zoom level
+    zoom_amp: 0.01           # zoom oscillation amplitude
+    zoom_beats: 8.0          # beats per zoom breath cycle
+    jitter_amp: 2.0          # pixel micro-jitter amount
+    blur_sigma: 0.6          # gaussian blur (0 = sharp)
+    contrast: 1.15           # image contrast
+    saturation: 0.7          # colour saturation (0 = monochrome, 1 = full)
+    brightness_amp: 0.02     # brightness pulse amplitude
+    brightness_beats: 4.0    # beats per brightness pulse cycle
+    vignette_fraction: 0.167 # vignette darkness (multiplied by PI; 0.167 = PI/6)
+    grain_strength: 25       # noise/grain intensity
