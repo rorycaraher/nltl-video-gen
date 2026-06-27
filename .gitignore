@@ -1,0 +1,8 @@
+# compiled binary
+nltl-clip
+
+# output videos
+*.mp4
+
+# OS
+.DS_Store
