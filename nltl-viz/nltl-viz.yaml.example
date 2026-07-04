@@ -1,0 +1,25 @@
+# nltl-viz custom preset config
+# Usage: nltl-viz --config nltl-viz.yaml --preset my-preset track.wav
+#
+# All fields are optional — omit any to get the built-in Preset default.
+# Built-in presets (industrial, subtle, aggressive) are always available
+# without a config file. A preset name here overrides a built-in of the
+# same name; an unrecognized name falls back to searching the built-ins.
+
+presets:
+  - name: my-preset
+    description: Custom preset for NLTL releases
+    band_count: 32               # number of frequency bands distributed around the perimeter
+    deform_amplitude: 0.35        # how far the outline pushes out at max energy (0 = rigid shape)
+    smoothing_attack: 0.03        # seconds — EMA time constant when band energy is rising
+    smoothing_release: 0.25       # seconds — EMA time constant when band energy is falling
+    onset_sensitivity: 1.0        # higher = more onsets detected (more flashes)
+    flash_decay_ms: 200           # fixed flash fade duration in milliseconds
+    flash_size: 0.18              # peak flash radius, as a fraction of half the canvas size
+    flash_intensity_scale: 1.0    # peak flash brightness multiplier
+    bass_color: "#6E5470"         # flash color when spectral centroid is bass-heavy
+    treble_color: "#2E8C8A"       # flash color when spectral centroid is treble-heavy
+    grain_strength: 14            # film grain noise stddev (0 = no grain)
+    vignette_fraction: 0.45       # vignette darkness at the corners (0 = none, 1 = max)
+    background_color: "#0A0A0C"   # flat background color (non-reactive)
+    outline_color: "#D8D8D2"      # NLTL face outline color (fixed, not audio-reactive)
