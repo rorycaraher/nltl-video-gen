@@ -55,7 +55,7 @@ BUILTIN: dict[str, Preset] = {
     "aggressive": Preset(
         name="aggressive",
         description="Punchier deform and flash, faster attack, heavier grain/vignette",
-        deform_amplitude=0.55,
+        deform_amplitude=0.15,
         smoothing_attack=0.015,
         smoothing_release=0.150,
         onset_sensitivity=1.4,

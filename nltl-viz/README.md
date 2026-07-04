@@ -35,7 +35,7 @@ nltl-viz --config nltl-viz.yaml --preset my-preset demo.wav
 nltl-viz
 ```
 
-Output files are saved alongside the audio file, named `{trackname}_viz.mp4` (or `{trackname}_viz_preview.mp4` for `--preview`).
+Output files are saved alongside the audio file, named `{trackname}_viz_{timestamp}.mp4` (or `{trackname}_viz_preview_{timestamp}.mp4` for `--preview`) — each render gets its own file so re-running with different settings never overwrites a previous output.
 
 ## Flags
 

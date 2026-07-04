@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -79,7 +80,8 @@ def run_render(
 
     out_dir = output_dir if output_dir is not None else audio_path.parent
     suffix = "viz_preview" if preview else "viz"
-    output_path = out_dir / f"{audio_path.stem}_{suffix}.mp4"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_path = out_dir / f"{audio_path.stem}_{suffix}_{timestamp}.mp4"
 
     total_frames = min(analysis.n_frames, FPS * 10) if preview else analysis.n_frames
     duration_sec = 10.0 if preview else analysis.duration_sec
