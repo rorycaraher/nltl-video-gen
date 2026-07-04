@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import Enum
+
 import cairo
 import numpy as np
 
@@ -7,6 +9,11 @@ from nltl_viz.preset import Preset
 
 _BASE_HALF_FRACTION = 0.35
 _FLASH_VISIBLE_THRESHOLD = 0.02
+
+
+class Shape(str, Enum):
+    face = "face"
+    space = "space"
 
 
 def cosine_interp_cyclic(values: np.ndarray, t: np.ndarray | float) -> np.ndarray:
@@ -23,7 +30,7 @@ def cosine_interp_cyclic(values: np.ndarray, t: np.ndarray | float) -> np.ndarra
     return values[i0] * (1.0 - blend) + values[i1] * blend
 
 
-def _polygon_vertices(size: int) -> np.ndarray:
+def _face_vertices(size: int) -> np.ndarray:
     """The NLTL face: inscribed in a bounding square, top-left and bottom-left
     at the box's own corners, bottom-right at 2/3 width along the bottom edge,
     top-right at 2/3 width x 1/3 height (an interior point of the box, not on
@@ -41,6 +48,35 @@ def _polygon_vertices(size: int) -> np.ndarray:
         ],
         dtype=np.float64,
     )
+
+
+def _space_vertices(size: int) -> np.ndarray:
+    """NLTL space: the same bounding square minus the NLTL face — the
+    complementary pentagon. Shares the face's short vertical edge and
+    diagonal as its own boundary, traversed in the opposite direction, so
+    the two shapes are exact complements with no gap or overlap. Not convex
+    — there's a reflex vertex where the face's silhouette cuts in. Clockwise
+    from top-left."""
+    cx = cy = size / 2.0
+    half = _BASE_HALF_FRACTION * size
+    x0, y0 = cx - half, cy - half
+    side = 2.0 * half
+    return np.array(
+        [
+            (x0, y0),
+            (x0 + side, y0),
+            (x0 + side, y0 + side),
+            (x0 + (2.0 / 3.0) * side, y0 + side),
+            (x0 + (2.0 / 3.0) * side, y0 + (1.0 / 3.0) * side),
+        ],
+        dtype=np.float64,
+    )
+
+
+def _polygon_vertices(size: int, shape: Shape = Shape.face) -> np.ndarray:
+    if shape == Shape.space:
+        return _space_vertices(size)
+    return _face_vertices(size)
 
 
 def _polygon_centroid(vertices: np.ndarray) -> tuple[float, float]:
@@ -78,9 +114,13 @@ def _polygon_perimeter_points(
 
 
 def deformed_polygon_points(
-    band_values: np.ndarray, size: int, amplitude: float, n_samples: int = 256
+    band_values: np.ndarray,
+    size: int,
+    amplitude: float,
+    shape: Shape = Shape.face,
+    n_samples: int = 256,
 ) -> tuple[np.ndarray, tuple[float, float]]:
-    vertices = _polygon_vertices(size)
+    vertices = _polygon_vertices(size, shape)
     centroid = _polygon_centroid(vertices)
     t = np.linspace(0.0, 1.0, n_samples, endpoint=False)
     bx, by = _polygon_perimeter_points(t, vertices)
@@ -165,11 +205,12 @@ def render_frame(
     flash_color: tuple[float, float, float],
     preset: Preset,
     size: int,
+    shape: Shape = Shape.face,
 ) -> np.ndarray:
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
     ctx = cairo.Context(surface)
     points, centroid = deformed_polygon_points(
-        band_values, size, preset.deform_amplitude
+        band_values, size, preset.deform_amplitude, shape
     )
     draw_frame(ctx, points, flash_brightness, flash_color, preset, size, centroid)
     return surface_to_rgb24(surface, size, size)

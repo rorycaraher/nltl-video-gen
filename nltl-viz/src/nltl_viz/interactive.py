@@ -14,9 +14,10 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".aiff", ".aif", ".ogg", ".m4a"}
 class Choices:
     audio_path: Path
     preset_name: str
+    shape: str
 
     def headless_command(self) -> str:
-        return f"nltl-viz --preset {self.preset_name} {self.audio_path}"
+        return f"nltl-viz --preset {self.preset_name} --shape {self.shape} {self.audio_path}"
 
 
 def scan_audio_files(cwd: Path) -> list[Path]:
@@ -42,4 +43,12 @@ def run() -> Choices:
     if preset_answer is None:
         raise RuntimeError("cancelled")
 
-    return Choices(audio_path=Path(audio_answer), preset_name=preset_answer)
+    shape_choices = [
+        questionary.Choice(title="face — the NLTL face", value="face"),
+        questionary.Choice(title="space — the NLTL space (the face's inverse)", value="space"),
+    ]
+    shape_answer = questionary.select("Shape", choices=shape_choices).ask()
+    if shape_answer is None:
+        raise RuntimeError("cancelled")
+
+    return Choices(audio_path=Path(audio_answer), preset_name=preset_answer, shape=shape_answer)

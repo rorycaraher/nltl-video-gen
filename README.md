@@ -10,7 +10,7 @@ Generates animated social media video clips from a music file and a still image.
 
 ### [nltl-viz](nltl-viz/)
 
-Generates an audio-reactive music visualizer clip from a music file alone — no image input. The outline of the NLTL face deforms in real time to the track's frequency content, with rhythmic flashes at detected transients, flashes coloured by spectrum content at that time. Python, librosa, cairo.
+Generates an audio-reactive music visualizer clip from a music file alone — no image input. The outline of a chosen shape (the NLTL face, or NLTL space — its inverse) deforms in real time to the track's frequency content, with rhythmic flashes at detected transients, flashes coloured by spectrum content at that time. Python, librosa, cairo.
 
 ## Structure
 

@@ -1,9 +1,12 @@
 import numpy as np
 
 from nltl_viz.render import (
+    Shape,
+    _face_vertices,
     _polygon_centroid,
     _polygon_perimeter_points,
     _polygon_vertices,
+    _space_vertices,
     deformed_polygon_points,
 )
 
@@ -78,3 +81,61 @@ def test_deformation_scales_from_returned_centroid():
     expected_y = centroid[1] + (by - centroid[1]) * 1.5
     assert np.allclose(points[:, 0], expected_x)
     assert np.allclose(points[:, 1], expected_y)
+
+
+def test_polygon_vertices_dispatches_on_shape():
+    size = 300
+    assert np.allclose(_polygon_vertices(size, Shape.face), _face_vertices(size))
+    assert np.allclose(_polygon_vertices(size, Shape.space), _space_vertices(size))
+    # default (no shape arg) is face, for backwards compatibility
+    assert np.allclose(_polygon_vertices(size), _face_vertices(size))
+
+
+def test_space_is_pentagon_matching_square_minus_face():
+    size = 300
+    cx = cy = size / 2.0
+    half = 0.35 * size
+    x0, y0 = cx - half, cy - half
+    side = 2.0 * half
+
+    expected = np.array(
+        [
+            (x0, y0),
+            (x0 + side, y0),
+            (x0 + side, y0 + side),
+            (x0 + (2.0 / 3.0) * side, y0 + side),
+            (x0 + (2.0 / 3.0) * side, y0 + (1.0 / 3.0) * side),
+        ]
+    )
+    assert np.allclose(_space_vertices(size), expected)
+
+
+def test_face_and_space_share_the_cut_boundary_exactly():
+    """The two shapes must be exact complements: the face's short vertical
+    edge and diagonal are literally the same segments as the space's,
+    just traversed in the opposite direction."""
+    size = 300
+    face = _face_vertices(size)
+    space = _space_vertices(size)
+
+    # face's top-right (index 1) and bottom-right (index 2) vertices
+    # are the space's last two vertices (index 4 and 3), respectively
+    assert np.allclose(face[1], space[4])
+    assert np.allclose(face[2], space[3])
+
+
+def test_space_centroid_is_within_bounding_extent():
+    vertices = _space_vertices(300)
+    cx, cy = _polygon_centroid(vertices)
+    assert vertices[:, 0].min() <= cx <= vertices[:, 0].max()
+    assert vertices[:, 1].min() <= cy <= vertices[:, 1].max()
+
+
+def test_deformed_polygon_points_differ_between_shapes():
+    band_values = np.random.default_rng(0).uniform(0, 1, size=32)
+    face_points, face_centroid = deformed_polygon_points(band_values, 300, 0.3, Shape.face)
+    space_points, space_centroid = deformed_polygon_points(band_values, 300, 0.3, Shape.space)
+
+    assert face_points.shape == space_points.shape  # same n_samples regardless of shape
+    assert not np.allclose(face_points, space_points)
+    assert face_centroid != space_centroid
