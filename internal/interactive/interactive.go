@@ -96,7 +96,7 @@ func Run() (*Choices, error) {
 		huh.NewGroup(
 			huh.NewInput().
 				Title("BPM").
-				Description("Beat-synced animation — leave blank to skip").
+				Description("Tempo-synced animations — leave blank to disable").
 				Placeholder("e.g. 140").
 				Validate(validateBPM).
 				Value(&bpmStr),

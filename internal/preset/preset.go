@@ -24,7 +24,7 @@ type Preset struct {
 var BuiltIn = map[string]Preset{
 	"industrial": {
 		Name:             "industrial",
-		Description:      "Desaturated, grainy, heavy vignette — the default techno aesthetic",
+		Description:      "Desaturated, grainy, heavy vignette",
 		ZoomBase:         1.02,
 		ZoomAmp:          0.01,
 		ZoomBeats:        8.0,
