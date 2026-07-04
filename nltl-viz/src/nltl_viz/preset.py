@@ -28,7 +28,7 @@ FIELD_NAMES = tuple(f.name for f in fields(Preset))
 BUILTIN: dict[str, Preset] = {
     "industrial": Preset(
         name="industrial",
-        description="Moderate deform, medium onset sensitivity — the default techno look",
+        description="Moderate deform, medium onset sensitivity",
         deform_amplitude=0.35,
         smoothing_attack=0.030,
         smoothing_release=0.250,

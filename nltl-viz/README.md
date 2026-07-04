@@ -51,7 +51,7 @@ Output files are saved alongside the audio file, named `{trackname}_viz_{timesta
 
 | Name | Description |
 |------|--------------|
-| `industrial` | Moderate deform, medium onset sensitivity — the default techno look |
+| `industrial` | Moderate deform, medium onset sensitivity |
 | `subtle` | Calmer, slower breathing, lighter grain/vignette |
 | `aggressive` | Punchier deform and flash, faster attack, heavier grain/vignette |
 

@@ -68,7 +68,7 @@ Run `nltl-clip profiles` to list them.
 
 | Name | Description |
 |------|-------------|
-| `industrial` | Desaturated, grainy, heavy vignette — the default techno aesthetic |
+| `industrial` | Desaturated, grainy, heavy vignette |
 | `clean` | Full colour, minimal grain, subtle movement |
 | `dark` | Deep blacks, extreme grain, maximum vignette |
 
