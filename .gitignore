@@ -1,8 +1,15 @@
 # compiled binary
-nltl-clip
+nltl-clip/nltl-clip
 
 # output videos
 *.mp4
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
 
 # OS
 .DS_Store
