@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/rcaraher/nltl-video-gen/internal/config"
 	"github.com/rcaraher/nltl-video-gen/internal/ffmpeg"
 	"github.com/rcaraher/nltl-video-gen/internal/interactive"
@@ -14,12 +15,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	labelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	valueStyle  = lipgloss.NewStyle().Bold(true)
+	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+)
+
+func label(s string) string { return labelStyle.Render(fmt.Sprintf("%-10s", s)) }
+
 func main() {
 	var (
 		profileName string
 		presetName  string
 		bpm         int
 		preview     bool
+		still       bool
+		verbose     bool
 		outputDir   string
 		configPath  string
 	)
@@ -42,14 +53,14 @@ func main() {
 				fmt.Println()
 				if err := renderClip(choices.AudioPath, choices.ImagePath,
 					choices.ProfileName, choices.PresetName,
-					choices.BPM, false, "", ""); err != nil {
+					choices.BPM, false, choices.Still, false, "", ""); err != nil {
 					return err
 				}
 				fmt.Printf("\nTo run this again without prompts:\n  %s\n", choices.HeadlessCommand())
 				return nil
 			}
 
-			return renderClip(args[0], args[1], profileName, presetName, bpm, preview, outputDir, configPath)
+			return renderClip(args[0], args[1], profileName, presetName, bpm, preview, still, verbose, outputDir, configPath)
 		},
 	}
 
@@ -59,6 +70,8 @@ func main() {
 		"visual preset (industrial, clean, dark, or custom from --config)")
 	root.Flags().IntVar(&bpm, "bpm", 0, "track BPM for beat-synced animations (0 = time-based defaults)")
 	root.Flags().BoolVar(&preview, "preview", false, "render a 10s low-quality preview")
+	root.Flags().BoolVar(&still, "still", false, "disable spatial motion (zoom, jitter) — keeps brightness pulsing")
+	root.Flags().BoolVarP(&verbose, "verbose", "v", false, "show raw ffmpeg output during render")
 	root.Flags().StringVarP(&outputDir, "output-dir", "o", "", "output directory (default: same as audio file)")
 	root.Flags().StringVarP(&configPath, "config", "c", "", "YAML config file with custom presets")
 
@@ -69,7 +82,7 @@ func main() {
 	}
 }
 
-func renderClip(audioPath, imagePath, profileName, presetName string, bpm int, preview bool, outputDir, configPath string) error {
+func renderClip(audioPath, imagePath, profileName, presetName string, bpm int, preview, still, verbose bool, outputDir, configPath string) error {
 	prof, ok := profile.Get(profileName)
 	if !ok {
 		return fmt.Errorf("unknown profile %q — try: %s", profileName, strings.Join(profile.Names(), ", "))
@@ -97,6 +110,12 @@ func renderClip(audioPath, imagePath, profileName, presetName string, bpm int, p
 		}
 	}
 
+	if still {
+		p.ZoomAmp = 0
+		p.JitterAmp = 0
+		p.ZoomBase = 1.0
+	}
+
 	duration, err := ffmpeg.GetDuration(audioPath)
 	if err != nil {
 		return fmt.Errorf("reading audio duration: %w", err)
@@ -116,15 +135,20 @@ func renderClip(audioPath, imagePath, profileName, presetName string, bpm int, p
 
 	filter := p.BuildFilter(prof.Width, prof.Height, bpm)
 
-	fmt.Printf("Profile:  %s (%dx%d)\n", prof.Name, prof.Width, prof.Height)
-	fmt.Printf("Preset:   %s — %s\n", p.Name, p.Description)
+	fmt.Println()
+	fmt.Println(label("Profile") + valueStyle.Render(fmt.Sprintf("%s (%dx%d)", prof.Name, prof.Width, prof.Height)))
+	fmt.Println(label("Preset") + valueStyle.Render(fmt.Sprintf("%s — %s", p.Name, p.Description)))
 	if bpm > 0 {
-		fmt.Printf("BPM:      %d\n", bpm)
+		fmt.Println(label("BPM") + valueStyle.Render(fmt.Sprintf("%d", bpm)))
 	}
 	if preview {
-		fmt.Printf("Preview:  10s low-quality render\n")
+		fmt.Println(label("Preview") + valueStyle.Render("10s low-quality render"))
 	}
-	fmt.Printf("Output:   %s\n\n", outputPath)
+	if still {
+		fmt.Println(label("Still") + valueStyle.Render("yes (spatial motion disabled)"))
+	}
+	fmt.Println(label("Output") + accentStyle.Render(outputPath))
+	fmt.Println()
 
 	return ffmpeg.Render(ffmpeg.Options{
 		ImagePath:  imagePath,
@@ -133,6 +157,7 @@ func renderClip(audioPath, imagePath, profileName, presetName string, bpm int, p
 		Filter:     filter,
 		Duration:   duration,
 		Preview:    preview,
+		Verbose:    verbose,
 	})
 }
 
@@ -141,10 +166,13 @@ func presetsCmd() *cobra.Command {
 		Use:   "presets",
 		Short: "List available built-in presets",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Built-in presets:")
+			fmt.Println(valueStyle.Render("Built-in presets:"))
 			for _, name := range preset.Names() {
 				p, _ := preset.Get(name)
-				fmt.Printf("  %-14s %s\n", name, p.Description)
+				fmt.Printf("  %s  %s\n",
+					valueStyle.Render(fmt.Sprintf("%-14s", name)),
+					labelStyle.Render(p.Description),
+				)
 			}
 		},
 	}
@@ -155,10 +183,13 @@ func profilesCmd() *cobra.Command {
 		Use:   "profiles",
 		Short: "List available output profiles",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Output profiles:")
+			fmt.Println(valueStyle.Render("Output profiles:"))
 			for _, name := range profile.Names() {
 				p, _ := profile.Get(name)
-				fmt.Printf("  %-22s %dx%d\n", name, p.Width, p.Height)
+				fmt.Printf("  %s  %s\n",
+					valueStyle.Render(fmt.Sprintf("%-22s", name)),
+					labelStyle.Render(fmt.Sprintf("%dx%d", p.Width, p.Height)),
+				)
 			}
 		},
 	}

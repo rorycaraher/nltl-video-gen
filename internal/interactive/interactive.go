@@ -1,19 +1,20 @@
 package interactive
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/rcaraher/nltl-video-gen/internal/preset"
 	"github.com/rcaraher/nltl-video-gen/internal/profile"
 )
 
 var audioExts = map[string]bool{
-	".wav": true, ".mp3": true, ".aiff": true, ".flac": true,
+	".wav": true, ".mp3": true, ".aiff": true, ".aif": true, ".flac": true,
 }
 
 var imageExts = map[string]bool{
@@ -26,6 +27,7 @@ type Choices struct {
 	ProfileName string
 	PresetName  string
 	BPM         int
+	Still       bool
 }
 
 func (c *Choices) HeadlessCommand() string {
@@ -37,37 +39,84 @@ func (c *Choices) HeadlessCommand() string {
 	if c.BPM > 0 {
 		parts = append(parts, "--bpm", strconv.Itoa(c.BPM))
 	}
+	if c.Still {
+		parts = append(parts, "--still")
+	}
 	parts = append(parts, c.AudioPath, c.ImagePath)
 	return strings.Join(parts, " ")
 }
 
 func Run() (*Choices, error) {
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("No arguments provided — running interactively.\n")
-
-	audioPath, err := pickFile(reader, "Audio file", audioExts)
+	audioFiles, err := scanFiles(audioExts)
 	if err != nil {
 		return nil, err
 	}
+	if len(audioFiles) == 0 {
+		return nil, fmt.Errorf("no audio files found in current directory")
+	}
 
-	imagePath, err := pickFile(reader, "Image file", imageExts)
+	imageFiles, err := scanFiles(imageExts)
 	if err != nil {
 		return nil, err
 	}
+	if len(imageFiles) == 0 {
+		return nil, fmt.Errorf("no image files found in current directory")
+	}
 
-	profileName, err := pickProfile(reader)
-	if err != nil {
+	var (
+		audioPath   = audioFiles[0]
+		imagePath   = imageFiles[0]
+		profileName = profile.Names()[0]
+		presetName  = preset.Names()[0]
+		bpmStr      = ""
+		still       = false
+	)
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Audio file").
+				Options(fileOptions(audioFiles)...).
+				Value(&audioPath),
+			huh.NewSelect[string]().
+				Title("Image file").
+				Options(fileOptions(imageFiles)...).
+				Value(&imagePath),
+		),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Profile").
+				Options(profileOptions()...).
+				Value(&profileName),
+			huh.NewSelect[string]().
+				Title("Preset").
+				Options(presetOptions()...).
+				Value(&presetName),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("BPM").
+				Description("Beat-synced animation — leave blank to skip").
+				Placeholder("e.g. 140").
+				Validate(validateBPM).
+				Value(&bpmStr),
+			huh.NewConfirm().
+				Title("Disable motion effects?").
+				Description("Suggested for photograph inputs").
+				Value(&still),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return nil, fmt.Errorf("cancelled")
+		}
 		return nil, err
 	}
 
-	presetName, err := pickPreset(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	bpm, err := pickBPM(reader)
-	if err != nil {
-		return nil, err
+	bpm := 0
+	if bpmStr != "" {
+		bpm, _ = strconv.Atoi(bpmStr)
 	}
 
 	return &Choices{
@@ -76,96 +125,61 @@ func Run() (*Choices, error) {
 		ProfileName: profileName,
 		PresetName:  presetName,
 		BPM:         bpm,
+		Still:       still,
 	}, nil
 }
 
-func pickFile(reader *bufio.Reader, label string, exts map[string]bool) (string, error) {
+func scanFiles(exts map[string]bool) ([]string, error) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
 	var files []string
 	for _, e := range entries {
 		if !e.IsDir() && exts[strings.ToLower(filepath.Ext(e.Name()))] {
 			files = append(files, e.Name())
 		}
 	}
-
-	if len(files) == 0 {
-		return "", fmt.Errorf("no matching files found in current directory for %s", label)
-	}
-
-	fmt.Printf("%s:\n", label)
-	for i, f := range files {
-		fmt.Printf("  %d. %s\n", i+1, f)
-	}
-
-	chosen, err := pickNumbered(reader, len(files))
-	if err != nil {
-		return "", err
-	}
-	return files[chosen], nil
+	return files, nil
 }
 
-func pickProfile(reader *bufio.Reader) (string, error) {
+func fileOptions(files []string) []huh.Option[string] {
+	opts := make([]huh.Option[string], len(files))
+	for i, f := range files {
+		opts[i] = huh.NewOption(f, f)
+	}
+	return opts
+}
+
+func profileOptions() []huh.Option[string] {
 	names := profile.Names()
-	fmt.Println("\nProfile:")
+	opts := make([]huh.Option[string], len(names))
 	for i, name := range names {
 		p, _ := profile.Get(name)
-		fmt.Printf("  %d. %-22s %dx%d\n", i+1, name, p.Width, p.Height)
+		label := fmt.Sprintf("%-22s %dx%d", name, p.Width, p.Height)
+		opts[i] = huh.NewOption(label, name)
 	}
-	chosen, err := pickNumbered(reader, len(names))
-	if err != nil {
-		return "", err
-	}
-	return names[chosen], nil
+	return opts
 }
 
-func pickPreset(reader *bufio.Reader) (string, error) {
+func presetOptions() []huh.Option[string] {
 	names := preset.Names()
-	fmt.Println("\nPreset:")
+	opts := make([]huh.Option[string], len(names))
 	for i, name := range names {
 		p, _ := preset.Get(name)
-		fmt.Printf("  %d. %-14s %s\n", i+1, name, p.Description)
+		label := fmt.Sprintf("%-14s %s", name, p.Description)
+		opts[i] = huh.NewOption(label, name)
 	}
-	chosen, err := pickNumbered(reader, len(names))
-	if err != nil {
-		return "", err
-	}
-	return names[chosen], nil
+	return opts
 }
 
-func pickBPM(reader *bufio.Reader) (int, error) {
-	fmt.Print("\nBPM (press Enter to skip): ")
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return 0, err
+func validateBPM(s string) error {
+	if s == "" {
+		return nil
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return 0, nil
-	}
-	n, err := strconv.Atoi(line)
+	n, err := strconv.Atoi(s)
 	if err != nil || n <= 0 {
-		fmt.Println("  Invalid BPM — skipping beat-sync.")
-		return 0, nil
+		return fmt.Errorf("enter a positive number or leave blank")
 	}
-	return n, nil
-}
-
-func pickNumbered(reader *bufio.Reader, count int) (int, error) {
-	for {
-		fmt.Print("  → ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return 0, err
-		}
-		n, err := strconv.Atoi(strings.TrimSpace(line))
-		if err != nil || n < 1 || n > count {
-			fmt.Printf("  Enter a number between 1 and %d\n", count)
-			continue
-		}
-		return n - 1, nil
-	}
+	return nil
 }

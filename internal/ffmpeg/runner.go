@@ -2,10 +2,12 @@ package ffmpeg
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Options struct {
@@ -15,6 +17,7 @@ type Options struct {
 	Filter     string
 	Duration   float64
 	Preview    bool
+	Verbose    bool
 }
 
 func GetDuration(audioPath string) (float64, error) {
@@ -63,7 +66,34 @@ func Render(opts Options) error {
 	)
 
 	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+
+	if opts.Verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return runWithSpinner("Rendering", cmd.Run)
+}
+
+func runWithSpinner(title string, fn func() error) error {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+
+	i := 0
+	line := fmt.Sprintf("  %s", title)
+	for {
+		select {
+		case err := <-done:
+			fmt.Printf("\r%s\r", strings.Repeat(" ", len(line)+4))
+			return err
+		default:
+			fmt.Printf("\r%s %s", frames[i%len(frames)], line)
+			i++
+			time.Sleep(80 * time.Millisecond)
+		}
+	}
 }
