@@ -1,7 +1,7 @@
 [project]
 name = "nltl-viz"
 version = "0.1.0"
-description = "Audio-reactive generative square visualizer for social media video clips"
+description = "Audio-reactive generative visualizer for social media video clips"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
