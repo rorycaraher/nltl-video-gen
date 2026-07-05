@@ -8,6 +8,7 @@ from nltl_viz.render import (
     _polygon_vertices,
     _space_vertices,
     deformed_polygon_points,
+    scaled_polygon_points,
 )
 
 
@@ -139,3 +140,30 @@ def test_deformed_polygon_points_differ_between_shapes():
     assert face_points.shape == space_points.shape  # same n_samples regardless of shape
     assert not np.allclose(face_points, space_points)
     assert face_centroid != space_centroid
+
+
+def test_scaled_polygon_points_at_scale_one_matches_plain_vertices():
+    points, centroid = scaled_polygon_points(300, Shape.face, scale=1.0)
+    assert np.allclose(points, _face_vertices(300))
+    assert centroid == _polygon_centroid(_face_vertices(300))
+
+
+def test_scaled_polygon_points_scales_from_centroid():
+    vertices = _space_vertices(300)
+    centroid = _polygon_centroid(vertices)
+    points, returned_centroid = scaled_polygon_points(300, Shape.space, scale=1.5)
+
+    expected = np.array(centroid) + (vertices - np.array(centroid)) * 1.5
+    assert np.allclose(points, expected)
+    assert returned_centroid == centroid
+
+
+def test_scaled_polygon_points_below_one_shrinks_toward_centroid():
+    points, centroid = scaled_polygon_points(300, Shape.face, scale=0.5)
+    vertices = _face_vertices(300)
+    # every scaled point should be strictly closer to the centroid than the
+    # corresponding plain vertex (shape shrinks toward its own centroid)
+    centroid_arr = np.array(centroid)
+    plain_dist = np.hypot(*(vertices - centroid_arr).T)
+    scaled_dist = np.hypot(*(points - centroid_arr).T)
+    assert np.all(scaled_dist < plain_dist)

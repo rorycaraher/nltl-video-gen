@@ -15,7 +15,7 @@ from nltl_viz import config, encode, interactive, postprocess, render
 from nltl_viz import preset as preset_mod
 from nltl_viz.audio import AudioAnalysis
 from nltl_viz.preset import Preset
-from nltl_viz.render import Shape
+from nltl_viz.render import Motion, Shape
 
 FPS = 30
 SIZE = 1080
@@ -40,7 +40,8 @@ app = typer.Typer(
     context_settings={"ignore_unknown_options": True},
     help=(
         "Generate an audio-reactive NLTL face visualization from a music file.\n\n"
-        "Usage: nltl-viz [AUDIO] [--preset NAME] [--shape face|space] [--preview] "
+        "Usage: nltl-viz [AUDIO] [--preset NAME] [--shape face|space] "
+        "[--motion deform|rigid] [--preview] "
         "[--output-dir DIR] [--config FILE] [--verbose]\n\n"
         "Run with no arguments for interactive mode."
     ),
@@ -49,7 +50,7 @@ console = Console()
 
 
 def _frame_generator(
-    analysis: AudioAnalysis, preset_obj: Preset, size: int, shape: Shape
+    analysis: AudioAnalysis, preset_obj: Preset, size: int, shape: Shape, motion: Motion
 ) -> Iterable[np.ndarray]:
     vignette_mask = postprocess.build_vignette_mask(size, size, preset_obj.vignette_fraction)
     rng = np.random.default_rng()
@@ -57,7 +58,10 @@ def _frame_generator(
         band_values = analysis.band_energy[i]
         brightness = float(analysis.flash_brightness[i])
         color = tuple(analysis.flash_color[i])
-        frame = render.render_frame(band_values, brightness, color, preset_obj, size, shape)
+        scale_value = float(analysis.scale_envelope[i])
+        frame = render.render_frame(
+            band_values, brightness, color, preset_obj, size, shape, motion, scale_value
+        )
         frame = postprocess.apply_vignette(frame, vignette_mask)
         frame = postprocess.apply_grain(frame, preset_obj.grain_strength, rng)
         yield frame
@@ -67,6 +71,7 @@ def run_render(
     audio_path: Path,
     preset_name: str,
     shape: Shape,
+    motion: Motion,
     output_dir: Optional[Path],
     config_path: Optional[Path],
     preview: bool,
@@ -77,6 +82,7 @@ def run_render(
     console.print()
     console.print(f"[bold]Preset[/bold]    {resolved_preset.name} — {resolved_preset.description}")
     console.print(f"[bold]Shape[/bold]     {shape.value}")
+    console.print(f"[bold]Motion[/bold]    {motion.value}")
     if preview:
         console.print("[bold]Preview[/bold]   10s low-quality render")
 
@@ -94,7 +100,7 @@ def run_render(
     console.print(f"[bold]Output[/bold]    {output_path}")
     console.print()
 
-    frames = _frame_generator(analysis, resolved_preset, SIZE, shape)
+    frames = _frame_generator(analysis, resolved_preset, SIZE, shape, motion)
     encode.render_video(
         frames,
         audio_path=audio_path,
@@ -113,7 +119,16 @@ def run_render(
 def _run_interactive() -> None:
     try:
         choices = interactive.run()
-        run_render(choices.audio_path, choices.preset_name, Shape(choices.shape), None, None, False, False)
+        run_render(
+            choices.audio_path,
+            choices.preset_name,
+            Shape(choices.shape),
+            Motion(choices.motion),
+            None,
+            None,
+            False,
+            False,
+        )
     except Exception as exc:  # surface any failure as a clean CLI error, not a traceback
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -138,6 +153,9 @@ def render_cmd(
     audio: Optional[Path] = typer.Argument(None, help="Path to the input audio file"),
     preset: str = typer.Option("industrial", "--preset", "-p", help="Visual preset"),
     shape: Shape = typer.Option(Shape.face, "--shape", help="Shape to visualize: face or space"),
+    motion: Motion = typer.Option(
+        Motion.deform, "--motion", help="Motion style: deform (per-band outline push) or rigid (uniform scale)"
+    ),
     preview: bool = typer.Option(False, "--preview", help="Render a 10s low-quality preview"),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory"),
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="YAML file with custom presets"),
@@ -149,7 +167,7 @@ def render_cmd(
         return
 
     try:
-        run_render(audio, preset, shape, output_dir, config_path, preview, verbose)
+        run_render(audio, preset, shape, motion, output_dir, config_path, preview, verbose)
     except Exception as exc:  # surface any failure as a clean CLI error, not a traceback
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc

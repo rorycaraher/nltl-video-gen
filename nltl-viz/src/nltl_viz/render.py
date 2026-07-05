@@ -16,6 +16,11 @@ class Shape(str, Enum):
     space = "space"
 
 
+class Motion(str, Enum):
+    deform = "deform"
+    rigid = "rigid"
+
+
 def cosine_interp_cyclic(values: np.ndarray, t: np.ndarray | float) -> np.ndarray:
     """Cyclic cosine interpolation: monotonic between control points, no overshoot,
     passes exactly through every control point at t = i/len(values)."""
@@ -131,6 +136,19 @@ def deformed_polygon_points(
     return np.stack([x, y], axis=1), centroid
 
 
+def scaled_polygon_points(
+    size: int, shape: Shape, scale: float
+) -> tuple[np.ndarray, tuple[float, float]]:
+    """The plain, undistorted shape's own vertices, uniformly scaled from its
+    centroid — used by `Motion.rigid`, where the perimeter stays in
+    proportion rather than deforming per-band."""
+    vertices = _polygon_vertices(size, shape)
+    centroid = _polygon_centroid(vertices)
+    centroid_arr = np.array(centroid)
+    points = centroid_arr + (vertices - centroid_arr) * scale
+    return points, centroid
+
+
 def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
     h = hex_color.lstrip("#")
     return tuple(int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
@@ -159,6 +177,39 @@ def draw_flash(
     ctx.paint()
 
 
+def _fill_polygon(ctx: cairo.Context, points: np.ndarray, color: tuple[float, float, float]) -> None:
+    ctx.set_source_rgb(*color)
+    ctx.move_to(points[0, 0], points[0, 1])
+    for px, py in points[1:]:
+        ctx.line_to(px, py)
+    ctx.close_path()
+    ctx.fill()
+
+
+def draw_inner_shape(
+    ctx: cairo.Context,
+    brightness: float,
+    color: tuple[float, float, float],
+    preset: Preset,
+    size: int,
+    center: tuple[float, float],
+    shape: Shape,
+) -> None:
+    """`Motion.rigid`'s replacement for `draw_flash`: a smaller, solid-filled,
+    concentric copy of the outer shape instead of a soft radial-gradient
+    blob — but driven by the exact same onset/decay/color mechanic."""
+    if brightness <= _FLASH_VISIBLE_THRESHOLD:
+        return
+    inner_scale = preset.flash_size * (0.4 + 0.6 * min(brightness, 1.0))
+    if inner_scale <= 0:
+        return
+    points, _ = scaled_polygon_points(size, shape, inner_scale)
+    # scaled_polygon_points scales from the shape's own centroid, which
+    # already equals `center` here, so points are already correctly placed.
+    rgb01 = tuple(c / 255.0 for c in color)
+    _fill_polygon(ctx, points, rgb01)
+
+
 def draw_frame(
     ctx: cairo.Context,
     points: np.ndarray,
@@ -167,10 +218,18 @@ def draw_frame(
     preset: Preset,
     size: int,
     center: tuple[float, float],
+    shape: Shape = Shape.face,
+    motion: Motion = Motion.deform,
 ) -> None:
     bg = _hex_to_rgb01(preset.background_color)
     ctx.set_source_rgb(*bg)
     ctx.paint()
+
+    if motion == Motion.rigid:
+        outline_rgb = _hex_to_rgb01(preset.outline_color)
+        _fill_polygon(ctx, points, outline_rgb)
+        draw_inner_shape(ctx, flash_brightness, flash_color, preset, size, center, shape)
+        return
 
     draw_flash(ctx, flash_brightness, flash_color, preset, size, center)
 
@@ -206,11 +265,19 @@ def render_frame(
     preset: Preset,
     size: int,
     shape: Shape = Shape.face,
+    motion: Motion = Motion.deform,
+    scale_value: float = 0.5,
 ) -> np.ndarray:
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
     ctx = cairo.Context(surface)
-    points, centroid = deformed_polygon_points(
-        band_values, size, preset.deform_amplitude, shape
-    )
-    draw_frame(ctx, points, flash_brightness, flash_color, preset, size, centroid)
+
+    if motion == Motion.rigid:
+        scale = 1.0 + preset.scale_amplitude * (scale_value - 0.5) * 2.0
+        points, centroid = scaled_polygon_points(size, shape, scale)
+    else:
+        points, centroid = deformed_polygon_points(
+            band_values, size, preset.deform_amplitude, shape
+        )
+
+    draw_frame(ctx, points, flash_brightness, flash_color, preset, size, centroid, shape, motion)
     return surface_to_rgb24(surface, size, size)

@@ -28,6 +28,7 @@ class AudioAnalysis:
     duration_sec: float
     n_frames: int
     band_energy: np.ndarray
+    scale_envelope: np.ndarray
     flash_brightness: np.ndarray
     flash_color: np.ndarray
 
@@ -53,6 +54,10 @@ def analyze(audio_path: Path, preset: Preset, fps: int = 30) -> AudioAnalysis:
     centroid = _centroid_normalized(y, sr, _N_FFT, hop_length)
     centroid = _resize_to_frames(centroid, n_frames)
 
+    rms_norm = _rms_envelope_normalized(y, hop_length)
+    rms_norm = _resize_to_frames(rms_norm, n_frames)
+    scale_envelope = _ema_smooth(rms_norm, preset.smoothing_attack, preset.smoothing_release, fps)
+
     flash_brightness, flash_color = precompute_flash_signal(onsets, centroid, n_frames, fps, preset)
 
     return AudioAnalysis(
@@ -60,6 +65,7 @@ def analyze(audio_path: Path, preset: Preset, fps: int = 30) -> AudioAnalysis:
         duration_sec=duration_sec,
         n_frames=n_frames,
         band_energy=band_smoothed,
+        scale_envelope=scale_envelope,
         flash_brightness=flash_brightness,
         flash_color=flash_color,
     )
@@ -131,6 +137,19 @@ def _detect_onsets(
         strength = float(np.clip(onset_env[frame] / ref, 0.0, 1.0))
         events.append(OnsetEvent(frame_index=int(frame), strength=strength))
     return events
+
+
+def _rms_envelope_normalized(y: np.ndarray, hop_length: int) -> np.ndarray:
+    """Overall loudness per frame — log-compressed (RMS is amplitude-domain,
+    so 20*log10 rather than the 10*log10 used for the power-domain bands)
+    and percentile-normalized the same way as band energy, so a quiet track
+    and a loud track both span a comparable [0,1] range."""
+    rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+    rms_db = 20.0 * np.log10(rms + 1e-12)
+    floor = np.percentile(rms_db, 5)
+    ceiling = np.percentile(rms_db, 95)
+    span = max(ceiling - floor, 1e-6)
+    return np.clip((rms_db - floor) / span, 0.0, 1.0)
 
 
 def _centroid_normalized(y: np.ndarray, sr: int, n_fft: int, hop_length: int) -> np.ndarray:
