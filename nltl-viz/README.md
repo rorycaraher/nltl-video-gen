@@ -85,6 +85,27 @@ Copy `nltl-viz.yaml.example` to `nltl-viz.yaml` and edit the values — see that
 - Its color is a live blend between two configurable colors, driven by the track's spectral centroid — bass-heavy moments skew toward `bass_color`, treble-heavy moments skew toward `treble_color`.
 - Grain and vignette are applied as a post-process over every frame (no image input, no desaturation pass — the palette is deliberately muted already).
 
+## Components
+
+The pipeline runs as four independent stages, each owned by a different library, so audio analysis and rendering aren't constrained by what an ffmpeg filter graph can express:
+
+| Stage | File | Library | Role |
+|-------|------|---------|------|
+| Audio analysis | `audio.py` | [librosa](https://librosa.org) | Decodes the audio file once, up front, and produces one value per *output video frame* (not per audio sample) for: band energy per frequency band (STFT), onset strength/timing, spectral centroid, and an RMS loudness envelope. |
+| Frame rendering | `render.py` | [pycairo](https://pycairo.readthedocs.io) | Draws the shape outline/fill and flash for each frame from the arrays `audio.py` precomputed — this is the only stage that draws anything. |
+| Post-processing | `postprocess.py` | [numpy](https://numpy.org) | Applies grain and vignette to each rendered frame as array operations on the raw RGB buffer. |
+| Encoding | `encode.py` | [ffmpeg](https://ffmpeg.org) (subprocess) | Muxes the piped raw RGB24 frames with the original audio track. ffmpeg does no filtering or effects work — it's a dumb encoder, all image work already happened in Python. |
+
+Supporting modules: `preset.py`/`config.py` define and load the numeric fields (`deform_amplitude`, `flash_decay_ms`, colors, etc.) that `audio.py` and `render.py` read; `cli.py` (built on [typer](https://typer.tiangolo.com)) wires the four stages together per-frame and exposes the flags documented above; `interactive.py` (built on [questionary](https://questionary.readthedocs.io)) is the prompt-driven entry point used when no audio file is passed on the command line.
+
+### What reacts to audio, and where it's computed
+
+All audio reactivity is resolved once in `audio.py` before any frame is drawn — `render.py` only ever reads precomputed per-frame values, it does no audio analysis of its own:
+
+- Shape motion — `deform` reads per-band energy; `rigid` reads the RMS loudness envelope.
+- Flash brightness — reads onset strength/timing (decayed per frame, combined across overlapping onsets with an elementwise `max`).
+- Flash/gradient color — reads spectral centroid, blended between `bass_color` and `treble_color`.
+
 ## Development
 
 ```bash
