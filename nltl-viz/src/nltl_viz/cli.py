@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -13,6 +15,7 @@ from typer.core import TyperGroup
 from nltl_viz import audio as audio_mod
 from nltl_viz import config, encode, interactive, postprocess, render
 from nltl_viz import preset as preset_mod
+from nltl_viz import video as video_mod
 from nltl_viz.audio import AudioAnalysis
 from nltl_viz.preset import Preset
 from nltl_viz.render import Motion, Shape
@@ -39,11 +42,13 @@ app = typer.Typer(
     cls=_DefaultCommandGroup,
     context_settings={"ignore_unknown_options": True},
     help=(
-        "Generate an audio-reactive NLTL face visualization from a music file.\n\n"
-        "Usage: nltl-viz [AUDIO] [--preset NAME] [--shape face|space] "
+        "Generate an audio-reactive NLTL face visualization from a music file, "
+        "or — given a video file — overlay it with transparency onto that video, "
+        "using the video's own audio track for analysis.\n\n"
+        "Usage: nltl-viz [AUDIO|VIDEO] [--preset NAME] [--shape face|space] "
         "[--motion deform|rigid] [--preview] "
         "[--output-dir DIR] [--config FILE] [--verbose]\n\n"
-        "Run with no arguments for interactive mode."
+        "Run with no arguments for interactive mode (audio files only)."
     ),
 )
 console = Console()
@@ -65,6 +70,36 @@ def _frame_generator(
         frame = postprocess.apply_vignette(frame, vignette_mask)
         frame = postprocess.apply_grain(frame, preset_obj.grain_strength, rng)
         yield frame
+
+
+def _overlay_frame_generator(
+    analysis: AudioAnalysis, preset_obj: Preset, width: int, height: int, shape: Shape, motion: Motion
+) -> Iterable[np.ndarray]:
+    """Same per-frame render as `_frame_generator`, but on a transparent
+    background sized to the source video's own resolution. Vignette is a
+    pure multiply so it's inert at alpha=0 (corners stay untouched). Grain is
+    additive, so — deliberately, unlike vignette — it isn't confined to the
+    shape's alpha: through the `fg_premultiplied + bg * (1 - alpha)`
+    compositing formula, grain noise added to the (zero, fully transparent)
+    background leaks straight into the video underneath, giving the whole
+    composited frame one continuous grain texture instead of an abrupt
+    dropoff in texture right at the shape's silhouette."""
+    size = min(width, height)
+    vignette_mask = postprocess.build_vignette_mask(width, height, preset_obj.vignette_fraction)
+    rng = np.random.default_rng()
+    for i in range(analysis.n_frames):
+        band_values = analysis.band_energy[i]
+        brightness = float(analysis.flash_brightness[i])
+        color = tuple(analysis.flash_color[i])
+        scale_value = float(analysis.scale_envelope[i])
+        frame = render.render_frame(
+            band_values, brightness, color, preset_obj, size, shape, motion, scale_value,
+            width=width, height=height, transparent_background=True,
+        )
+        rgb, alpha = frame[:, :, :3], frame[:, :, 3:4]
+        rgb = postprocess.apply_vignette(rgb, vignette_mask)
+        rgb = postprocess.apply_grain(rgb, preset_obj.grain_strength, rng)
+        yield np.concatenate([rgb, alpha], axis=-1)
 
 
 def run_render(
@@ -101,18 +136,61 @@ def run_render(
     console.print()
 
     frames = _frame_generator(analysis, resolved_preset, SIZE, shape, motion)
-    encode.render_video(
-        frames,
-        audio_path=audio_path,
-        output_path=output_path,
-        width=SIZE,
-        height=SIZE,
-        fps=FPS,
-        duration_sec=duration_sec,
-        total_frames=total_frames,
-        preview=preview,
-        verbose=verbose,
+    cmd = encode.build_ffmpeg_cmd(audio_path, output_path, SIZE, SIZE, FPS, duration_sec, preview)
+    encode.render_video(frames, cmd=cmd, total_frames=total_frames, preview=preview, verbose=verbose)
+    console.print(f"[green]Done[/green] → {output_path}")
+
+
+def run_overlay(
+    video_path: Path,
+    preset_name: str,
+    shape: Shape,
+    motion: Motion,
+    output_dir: Optional[Path],
+    config_path: Optional[Path],
+    preview: bool,
+    verbose: bool,
+) -> None:
+    resolved_preset = config.resolve_preset(preset_name, config_path)
+    probe = video_mod.probe(video_path)
+
+    console.print()
+    console.print(f"[bold]Preset[/bold]    {resolved_preset.name} — {resolved_preset.description}")
+    console.print(f"[bold]Shape[/bold]     {shape.value}")
+    console.print(f"[bold]Motion[/bold]    {motion.value}")
+    console.print(f"[bold]Overlay[/bold]   {probe.width}x{probe.height} @ {probe.fps_rational}fps")
+    if preview:
+        console.print("[bold]Preview[/bold]   10s low-quality render")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        wav_path = Path(tmp_dir) / "audio.wav"
+        with console.status("Extracting audio..."):
+            video_mod.extract_audio(video_path, wav_path)
+        with console.status("Analyzing audio..."):
+            analysis = audio_mod.analyze(wav_path, resolved_preset, fps=probe.fps)
+
+    out_dir = output_dir if output_dir is not None else video_path.parent
+    suffix = "viz-overlay_preview" if preview else "viz-overlay"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_path = out_dir / f"{video_path.stem}_{suffix}_{timestamp}.mp4"
+
+    total_frames = min(analysis.n_frames, math.ceil(probe.fps * 10)) if preview else analysis.n_frames
+    duration_sec = 10.0 if preview else analysis.duration_sec
+
+    console.print(f"[bold]Output[/bold]    {output_path}")
+    console.print()
+
+    viz_frames = _overlay_frame_generator(analysis, resolved_preset, probe.width, probe.height, shape, motion)
+    video_frames = video_mod.decode_frames(video_path, probe.width, probe.height, total_frames)
+    composited = (
+        video_mod.composite_over(video_frame, viz_frame)
+        for video_frame, viz_frame in zip(video_frames, viz_frames)
     )
+
+    cmd = encode.build_overlay_ffmpeg_cmd(
+        video_path, output_path, probe.width, probe.height, probe.fps_rational, duration_sec, preview
+    )
+    encode.render_video(composited, cmd=cmd, total_frames=total_frames, preview=preview, verbose=verbose)
     console.print(f"[green]Done[/green] → {output_path}")
 
 
@@ -150,7 +228,9 @@ def default_callback(ctx: typer.Context) -> None:
 
 @app.command(DEFAULT_COMMAND, hidden=True)
 def render_cmd(
-    audio: Optional[Path] = typer.Argument(None, help="Path to the input audio file"),
+    input_path: Optional[Path] = typer.Argument(
+        None, help="Path to the input audio file, or a video file to overlay the visualization onto"
+    ),
     preset: str = typer.Option("industrial", "--preset", "-p", help="Visual preset"),
     shape: Shape = typer.Option(Shape.face, "--shape", help="Shape to visualize: face or space"),
     motion: Motion = typer.Option(
@@ -161,13 +241,17 @@ def render_cmd(
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="YAML file with custom presets"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show raw ffmpeg output during render"),
 ) -> None:
-    """Generate an audio-reactive NLTL face visualization from a music file."""
-    if audio is None:
+    """Generate an audio-reactive NLTL face visualization from a music file,
+    or overlay it with transparency onto a video file's own audio."""
+    if input_path is None:
         _run_interactive()
         return
 
     try:
-        run_render(audio, preset, shape, motion, output_dir, config_path, preview, verbose)
+        if video_mod.is_video_file(input_path):
+            run_overlay(input_path, preset, shape, motion, output_dir, config_path, preview, verbose)
+        else:
+            run_render(input_path, preset, shape, motion, output_dir, config_path, preview, verbose)
     except Exception as exc:  # surface any failure as a clean CLI error, not a traceback
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
