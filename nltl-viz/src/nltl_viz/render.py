@@ -124,8 +124,10 @@ def deformed_polygon_points(
     amplitude: float,
     shape: Shape = Shape.face,
     n_samples: int = 256,
+    *,
+    offset: tuple[float, float] = (0.0, 0.0),
 ) -> tuple[np.ndarray, tuple[float, float]]:
-    vertices = _polygon_vertices(size, shape)
+    vertices = _polygon_vertices(size, shape) + np.array(offset)
     centroid = _polygon_centroid(vertices)
     t = np.linspace(0.0, 1.0, n_samples, endpoint=False)
     bx, by = _polygon_perimeter_points(t, vertices)
@@ -137,12 +139,12 @@ def deformed_polygon_points(
 
 
 def scaled_polygon_points(
-    size: int, shape: Shape, scale: float
+    size: int, shape: Shape, scale: float, *, offset: tuple[float, float] = (0.0, 0.0)
 ) -> tuple[np.ndarray, tuple[float, float]]:
     """The plain, undistorted shape's own vertices, uniformly scaled from its
     centroid — used by `Motion.rigid`, where the perimeter stays in
     proportion rather than deforming per-band."""
-    vertices = _polygon_vertices(size, shape)
+    vertices = _polygon_vertices(size, shape) + np.array(offset)
     centroid = _polygon_centroid(vertices)
     centroid_arr = np.array(centroid)
     points = centroid_arr + (vertices - centroid_arr) * scale
@@ -220,10 +222,13 @@ def draw_frame(
     center: tuple[float, float],
     shape: Shape = Shape.face,
     motion: Motion = Motion.deform,
+    *,
+    transparent_background: bool = False,
 ) -> None:
-    bg = _hex_to_rgb01(preset.background_color)
-    ctx.set_source_rgb(*bg)
-    ctx.paint()
+    if not transparent_background:
+        bg = _hex_to_rgb01(preset.background_color)
+        ctx.set_source_rgb(*bg)
+        ctx.paint()
 
     if motion == Motion.rigid:
         outline_rgb = _hex_to_rgb01(preset.outline_color)
@@ -258,6 +263,25 @@ def surface_to_rgb24(
     return np.ascontiguousarray(rgb)
 
 
+def surface_to_rgba_premultiplied(
+    surface: cairo.ImageSurface, width: int, height: int
+) -> np.ndarray:
+    """Like `surface_to_rgb24` but keeps the alpha channel, and leaves RGB
+    premultiplied by alpha rather than un-premultiplying it — premultiplied
+    "over" compositing (`out = fg_premult + bg * (1 - alpha)`) needs no
+    unpremultiply/divide step, so this is both simpler and avoids the
+    precision loss un-premultiplying would cost at partially-covered
+    (anti-aliased) edge pixels."""
+    surface.flush()
+    stride = surface.get_stride()
+    buf = np.ndarray(
+        shape=(height, stride // 4, 4), dtype=np.uint8, buffer=surface.get_data()
+    )
+    buf = buf[:, :width, :]
+    rgba = buf[:, :, [2, 1, 0, 3]]
+    return np.ascontiguousarray(rgba)
+
+
 def render_frame(
     band_values: np.ndarray,
     flash_brightness: float,
@@ -267,17 +291,35 @@ def render_frame(
     shape: Shape = Shape.face,
     motion: Motion = Motion.deform,
     scale_value: float = 0.5,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    transparent_background: bool = False,
 ) -> np.ndarray:
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    """Renders one frame onto a `width`x`height` canvas (defaulting to a
+    `size`x`size` square when unset), with the shape itself always sized and
+    proportioned off `size` and centered in the canvas — so a wider canvas
+    just extends the (transparent, in overlay mode) area around the shape
+    rather than stretching it."""
+    w = width if width is not None else size
+    h = height if height is not None else size
+    offset = ((w - size) / 2.0, (h - size) / 2.0)
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
     ctx = cairo.Context(surface)
 
     if motion == Motion.rigid:
         scale = 1.0 + preset.scale_amplitude * (scale_value - 0.5) * 2.0
-        points, centroid = scaled_polygon_points(size, shape, scale)
+        points, centroid = scaled_polygon_points(size, shape, scale, offset=offset)
     else:
         points, centroid = deformed_polygon_points(
-            band_values, size, preset.deform_amplitude, shape
+            band_values, size, preset.deform_amplitude, shape, offset=offset
         )
 
-    draw_frame(ctx, points, flash_brightness, flash_color, preset, size, centroid, shape, motion)
-    return surface_to_rgb24(surface, size, size)
+    draw_frame(
+        ctx, points, flash_brightness, flash_color, preset, size, centroid, shape, motion,
+        transparent_background=transparent_background,
+    )
+    if transparent_background:
+        return surface_to_rgba_premultiplied(surface, w, h)
+    return surface_to_rgb24(surface, w, h)

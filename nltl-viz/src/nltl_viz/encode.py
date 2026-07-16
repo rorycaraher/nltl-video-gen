@@ -9,16 +9,19 @@ import numpy as np
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 
+def _quality_flags(preview: bool) -> list[str]:
+    return ["-preset", "ultrafast", "-crf", "35"] if preview else ["-preset", "medium", "-crf", "20"]
+
+
 def build_ffmpeg_cmd(
     audio_path: Path,
     output_path: Path,
     width: int,
     height: int,
-    fps: int,
+    fps: int | str,
     duration_sec: float,
     preview: bool,
 ) -> list[str]:
-    quality = ["-preset", "ultrafast", "-crf", "35"] if preview else ["-preset", "medium", "-crf", "20"]
     return [
         "ffmpeg",
         "-y",
@@ -26,8 +29,37 @@ def build_ffmpeg_cmd(
         "-i", str(audio_path),
         "-map", "0:v", "-map", "1:a",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        *quality,
+        *_quality_flags(preview),
         "-c:a", "aac", "-b:a", "192k",
+        "-t", f"{duration_sec:.3f}",
+        "-shortest",
+        str(output_path),
+    ]
+
+
+def build_overlay_ffmpeg_cmd(
+    source_video_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int | str,
+    duration_sec: float,
+    preview: bool,
+) -> list[str]:
+    """Composited RGB frames (already blended with the source video in
+    Python) go in as raw video on stdin; the source video is a second input
+    used only for its audio track, which is stream-copied straight through
+    rather than re-encoded — it's the same bytes already used for analysis,
+    so there's nothing to gain from a second lossy AAC pass."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
+        "-i", str(source_video_path),
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        *_quality_flags(preview),
+        "-c:a", "copy",
         "-t", f"{duration_sec:.3f}",
         "-shortest",
         str(output_path),
@@ -37,17 +69,11 @@ def build_ffmpeg_cmd(
 def render_video(
     frames: Iterable[np.ndarray],
     *,
-    audio_path: Path,
-    output_path: Path,
-    width: int,
-    height: int,
-    fps: int,
-    duration_sec: float,
+    cmd: list[str],
     total_frames: int,
     preview: bool,
     verbose: bool,
 ) -> None:
-    cmd = build_ffmpeg_cmd(audio_path, output_path, width, height, fps, duration_sec, preview)
     stdout = None if verbose else subprocess.DEVNULL
     stderr = None if verbose else subprocess.PIPE
 
