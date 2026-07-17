@@ -2,10 +2,12 @@
 
 A CLI tool for generating audio-reactive music visualization video clips from a short audio file. Fully generative — no image input. The outline of the chosen shape (the NLTL face, or NLTL space — its inverse) continuously deforms with the track's frequency content, and a flash fires on each detected onset, colored by the moment's spectral centroid.
 
+Point it at a video file instead of an audio file and it switches to overlay mode: the same visualization, transparent everywhere except the shape/flash, composited on top of the video using the video's own audio track for analysis.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python version and dependencies)
-- [ffmpeg](https://ffmpeg.org) in your PATH
+- [ffmpeg](https://ffmpeg.org) in your PATH (`ffprobe`, installed alongside it, is required too — used to read a source video's resolution/frame rate for overlay mode)
 - Cairo + pkg-config (pycairo builds against system Cairo): `brew install cairo pkg-config` on macOS
 
 ## Install
@@ -18,7 +20,7 @@ uv sync
 ## Usage
 
 ```
-nltl-viz [audio] [flags]
+nltl-viz [audio|video] [flags]
 ```
 
 ```bash
@@ -37,11 +39,14 @@ nltl-viz --shape space demo.wav
 # Rigid motion — perimeter stays in proportion, scales with overall loudness
 nltl-viz --motion rigid demo.wav
 
+# Overlay onto a video file instead — same flags, auto-detected by extension
+nltl-viz --preset aggressive performance.mp4
+
 # Interactive mode — prompts for audio file, preset, shape, and motion
 nltl-viz
 ```
 
-Output files are saved alongside the audio file, named `{trackname}_viz_{timestamp}.mp4` (or `{trackname}_viz_preview_{timestamp}.mp4` for `--preview`) — each render gets its own file so re-running with different settings never overwrites a previous output.
+Output files are saved alongside the input file, named `{name}_viz_{timestamp}.mp4` for an audio input (or `{name}_viz_preview_{timestamp}.mp4` for `--preview`), and `{name}_viz-overlay_{timestamp}.mp4` for a video input (`{name}_viz-overlay_preview_{timestamp}.mp4` for `--preview`) — each render gets its own file so re-running with different settings never overwrites a previous output.
 
 ## Flags
 
@@ -51,7 +56,7 @@ Output files are saved alongside the audio file, named `{trackname}_viz_{timesta
 | `--shape` | `face` | Shape to visualize: `face` or `space` (its inverse) |
 | `--motion` | `deform` | Motion style: `deform` (perimeter distorts per frequency band) or `rigid` (perimeter stays in proportion, scales with overall loudness) |
 | `--preview` | `false` | Render a 10s low-quality preview to check the look |
-| `--output-dir`, `-o` | same as audio | Where to write the output file |
+| `--output-dir`, `-o` | same as input | Where to write the output file |
 | `--config`, `-c` | — | YAML file with custom presets |
 | `--verbose`, `-v` | `false` | Show raw ffmpeg output during render |
 
@@ -85,6 +90,23 @@ Copy `nltl-viz.yaml.example` to `nltl-viz.yaml` and edit the values — see that
 - Its color is a live blend between two configurable colors, driven by the track's spectral centroid — bass-heavy moments skew toward `bass_color`, treble-heavy moments skew toward `treble_color`.
 - Grain and vignette are applied as a post-process over every frame (no image input, no desaturation pass — the palette is deliberately muted already).
 
+## Video overlay
+
+Passing a video file (`.mp4`, `.mov`, `.mkv`, `.avi`, `.m4v`, `.webm`) instead of an audio file switches to overlay mode automatically — same flags, same presets, same shape/motion logic, no separate command:
+
+```bash
+nltl-viz --preset aggressive performance.mp4
+```
+
+What's different from audio-only mode:
+
+- The video's audio track is what gets analyzed (extracted to a temp WAV internally, then discarded) — there's no separate audio file to supply.
+- The canvas renders at the source video's own resolution rather than a fixed square, with the shape sized and centered off the frame's shorter dimension — a landscape 1920x1080 clip gets a centered square-proportioned shape, not a stretched one.
+- Analysis, rendering, and encoding all run at the video's own probed frame rate (read via `ffprobe`), not a fixed 30fps, so viz frames line up 1:1 with video frames.
+- The shape/flash render fully opaque exactly as in audio-only mode; everything else is transparent, so the source video shows through untouched everywhere the shape isn't. Grain and vignette still run on every frame as in audio-only mode — including the transparent area — for one continuous texture across the whole composited frame rather than a hard dropoff at the shape's silhouette.
+- The output's audio is the source video's own audio track, copied through unchanged (no re-encode) rather than re-compressed.
+- Interactive mode (running `nltl-viz` with no arguments) only scans for audio files — overlay mode is invoked by passing a video path directly on the command line.
+
 ## Components
 
 The pipeline runs as four independent stages, each owned by a different library, so audio analysis and rendering aren't constrained by what an ffmpeg filter graph can express:
@@ -92,11 +114,12 @@ The pipeline runs as four independent stages, each owned by a different library,
 | Stage | File | Library | Role |
 |-------|------|---------|------|
 | Audio analysis | `audio.py` | [librosa](https://librosa.org) | Decodes the audio file once, up front, and produces one value per *output video frame* (not per audio sample) for: band energy per frequency band (STFT), onset strength/timing, spectral centroid, and an RMS loudness envelope. |
-| Frame rendering | `render.py` | [pycairo](https://pycairo.readthedocs.io) | Draws the shape outline/fill and flash for each frame from the arrays `audio.py` precomputed — this is the only stage that draws anything. |
-| Post-processing | `postprocess.py` | [numpy](https://numpy.org) | Applies grain and vignette to each rendered frame as array operations on the raw RGB buffer. |
-| Encoding | `encode.py` | [ffmpeg](https://ffmpeg.org) (subprocess) | Muxes the piped raw RGB24 frames with the original audio track. ffmpeg does no filtering or effects work — it's a dumb encoder, all image work already happened in Python. |
+| Frame rendering | `render.py` | [pycairo](https://pycairo.readthedocs.io) | Draws the shape outline/fill and flash for each frame from the arrays `audio.py` precomputed — this is the only stage that draws anything. In overlay mode it renders onto the source video's own canvas size with the background left unpainted, returning premultiplied RGBA instead of opaque RGB24. |
+| Post-processing | `postprocess.py` | [numpy](https://numpy.org) | Applies grain and vignette to each rendered frame as array operations on the raw RGB buffer (alpha, when present, passes through untouched). |
+| Video I/O | `video.py` | [ffmpeg](https://ffmpeg.org)/`ffprobe` (subprocess) | Overlay-mode only: probes a source video's resolution/frame rate, extracts its audio to a temp WAV for analysis, decodes its frames to raw RGB, and alpha-composites each rendered viz frame over the corresponding video frame (`fg_premultiplied + bg * (1 - alpha)`). |
+| Encoding | `encode.py` | [ffmpeg](https://ffmpeg.org) (subprocess) | Muxes the piped raw RGB24 frames (composited, in overlay mode) with the audio track — the original audio file re-encoded to AAC in audio-only mode, or the source video's own audio track stream-copied unchanged in overlay mode. ffmpeg does no filtering or effects work — it's a dumb encoder/decoder, all image work already happened in Python. |
 
-Supporting modules: `preset.py`/`config.py` define and load the numeric fields (`deform_amplitude`, `flash_decay_ms`, colors, etc.) that `audio.py` and `render.py` read; `cli.py` (built on [typer](https://typer.tiangolo.com)) wires the four stages together per-frame and exposes the flags documented above; `interactive.py` (built on [questionary](https://questionary.readthedocs.io)) is the prompt-driven entry point used when no audio file is passed on the command line.
+Supporting modules: `preset.py`/`config.py` define and load the numeric fields (`deform_amplitude`, `flash_decay_ms`, colors, etc.) that `audio.py` and `render.py` read; `cli.py` (built on [typer](https://typer.tiangolo.com)) wires the stages together per-frame, dispatches to audio-only or overlay mode based on the input file's extension, and exposes the flags documented above; `interactive.py` (built on [questionary](https://questionary.readthedocs.io)) is the prompt-driven entry point used when no file is passed on the command line — audio files only.
 
 ### What reacts to audio, and where it's computed
 
