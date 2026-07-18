@@ -6,6 +6,7 @@ from pathlib import Path
 import questionary
 
 from nltl_viz import preset as preset_mod
+from nltl_viz import shapes as shapes_mod
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".aiff", ".aif", ".ogg", ".m4a"}
 
@@ -50,6 +51,9 @@ def run() -> Choices:
     shape_choices = [
         questionary.Choice(title="face — the NLTL face", value="face"),
         questionary.Choice(title="space — the NLTL space (the face's inverse)", value="space"),
+    ] + [
+        questionary.Choice(title=f"{name} — custom shape", value=name)
+        for name in shapes_mod.names(shapes_mod.default_shapes_path())
     ]
     shape_answer = questionary.select("Shape", choices=shape_choices).ask()
     if shape_answer is None:
@@ -58,6 +62,9 @@ def run() -> Choices:
     motion_choices = [
         questionary.Choice(title="deform — perimeter distorts per frequency band", value="deform"),
         questionary.Choice(title="rigid — perimeter stays in proportion, scales with overall loudness", value="rigid"),
+        questionary.Choice(
+            title="pulse — constant size and shape, reactivity via fill opacity", value="pulse"
+        ),
     ]
     motion_answer = questionary.select("Motion", choices=motion_choices).ask()
     if motion_answer is None:

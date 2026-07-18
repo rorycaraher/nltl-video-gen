@@ -10,6 +10,7 @@ class Preset:
     band_count: int = 32
     deform_amplitude: float = 0.0
     scale_amplitude: float = 0.0
+    pulse_max_opacity: float = 0.85
     smoothing_attack: float = 0.03
     smoothing_release: float = 0.25
     onset_sensitivity: float = 1.0
