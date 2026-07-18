@@ -6,8 +6,10 @@ import cairo
 import numpy as np
 
 from nltl_viz.preset import Preset
+from nltl_viz.shapes import CustomShape
 
 _BASE_HALF_FRACTION = 0.35
+_PULSE_HALF_FRACTION = 0.5  # edge-to-edge in the frame's shorter dimension — see pulse_polygon_points
 _FLASH_VISIBLE_THRESHOLD = 0.02
 
 
@@ -19,6 +21,7 @@ class Shape(str, Enum):
 class Motion(str, Enum):
     deform = "deform"
     rigid = "rigid"
+    pulse = "pulse"
 
 
 def cosine_interp_cyclic(values: np.ndarray, t: np.ndarray | float) -> np.ndarray:
@@ -35,13 +38,13 @@ def cosine_interp_cyclic(values: np.ndarray, t: np.ndarray | float) -> np.ndarra
     return values[i0] * (1.0 - blend) + values[i1] * blend
 
 
-def _face_vertices(size: int) -> np.ndarray:
+def _face_vertices(size: int, half_fraction: float = _BASE_HALF_FRACTION) -> np.ndarray:
     """The NLTL face: inscribed in a bounding square, top-left and bottom-left
     at the box's own corners, bottom-right at 2/3 width along the bottom edge,
     top-right at 2/3 width x 1/3 height (an interior point of the box, not on
     any box edge). Clockwise from top-left."""
     cx = cy = size / 2.0
-    half = _BASE_HALF_FRACTION * size
+    half = half_fraction * size
     x0, y0 = cx - half, cy - half
     side = 2.0 * half
     return np.array(
@@ -55,7 +58,7 @@ def _face_vertices(size: int) -> np.ndarray:
     )
 
 
-def _space_vertices(size: int) -> np.ndarray:
+def _space_vertices(size: int, half_fraction: float = _BASE_HALF_FRACTION) -> np.ndarray:
     """NLTL space: the same bounding square minus the NLTL face — the
     complementary pentagon. Shares the face's short vertical edge and
     diagonal as its own boundary, traversed in the opposite direction, so
@@ -63,7 +66,7 @@ def _space_vertices(size: int) -> np.ndarray:
     — there's a reflex vertex where the face's silhouette cuts in. Clockwise
     from top-left."""
     cx = cy = size / 2.0
-    half = _BASE_HALF_FRACTION * size
+    half = half_fraction * size
     x0, y0 = cx - half, cy - half
     side = 2.0 * half
     return np.array(
@@ -78,10 +81,29 @@ def _space_vertices(size: int) -> np.ndarray:
     )
 
 
-def _polygon_vertices(size: int, shape: Shape = Shape.face) -> np.ndarray:
+def _custom_shape_vertices(
+    size: int, vertices: tuple[tuple[float, float], ...], half_fraction: float = _BASE_HALF_FRACTION
+) -> np.ndarray:
+    """A custom shape's vertices are stored as fractions of the same
+    bounding square face/space are defined within, so it renders at the same
+    scale and position they do."""
+    cx = cy = size / 2.0
+    half = half_fraction * size
+    x0, y0 = cx - half, cy - half
+    side = 2.0 * half
+    return np.array(
+        [(x0 + fx * side, y0 + fy * side) for fx, fy in vertices], dtype=np.float64
+    )
+
+
+def _polygon_vertices(
+    size: int, shape: Shape | CustomShape = Shape.face, half_fraction: float = _BASE_HALF_FRACTION
+) -> np.ndarray:
+    if isinstance(shape, CustomShape):
+        return _custom_shape_vertices(size, shape.vertices, half_fraction)
     if shape == Shape.space:
-        return _space_vertices(size)
-    return _face_vertices(size)
+        return _space_vertices(size, half_fraction)
+    return _face_vertices(size, half_fraction)
 
 
 def _polygon_centroid(vertices: np.ndarray) -> tuple[float, float]:
@@ -122,7 +144,7 @@ def deformed_polygon_points(
     band_values: np.ndarray,
     size: int,
     amplitude: float,
-    shape: Shape = Shape.face,
+    shape: Shape | CustomShape = Shape.face,
     n_samples: int = 256,
     *,
     offset: tuple[float, float] = (0.0, 0.0),
@@ -139,7 +161,7 @@ def deformed_polygon_points(
 
 
 def scaled_polygon_points(
-    size: int, shape: Shape, scale: float, *, offset: tuple[float, float] = (0.0, 0.0)
+    size: int, shape: Shape | CustomShape, scale: float, *, offset: tuple[float, float] = (0.0, 0.0)
 ) -> tuple[np.ndarray, tuple[float, float]]:
     """The plain, undistorted shape's own vertices, uniformly scaled from its
     centroid — used by `Motion.rigid`, where the perimeter stays in
@@ -149,6 +171,20 @@ def scaled_polygon_points(
     centroid_arr = np.array(centroid)
     points = centroid_arr + (vertices - centroid_arr) * scale
     return points, centroid
+
+
+def pulse_polygon_points(
+    size: int, shape: Shape | CustomShape, *, offset: tuple[float, float] = (0.0, 0.0)
+) -> tuple[np.ndarray, tuple[float, float]]:
+    """`Motion.pulse`'s shape: truly constant size and proportions, inscribed
+    edge-to-edge in the frame's shorter dimension (`size` is already
+    `min(width, height)` by the time it reaches here — see `render_frame`) —
+    unlike `deform`/`rigid`, which stay at `_BASE_HALF_FRACTION`'s small
+    centered scale. Reactivity comes entirely from the fill's opacity, not
+    from any per-frame change to these points."""
+    vertices = _polygon_vertices(size, shape, half_fraction=_PULSE_HALF_FRACTION) + np.array(offset)
+    centroid = _polygon_centroid(vertices)
+    return vertices, centroid
 
 
 def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
@@ -179,8 +215,10 @@ def draw_flash(
     ctx.paint()
 
 
-def _fill_polygon(ctx: cairo.Context, points: np.ndarray, color: tuple[float, float, float]) -> None:
-    ctx.set_source_rgb(*color)
+def _fill_polygon(
+    ctx: cairo.Context, points: np.ndarray, color: tuple[float, float, float], alpha: float = 1.0
+) -> None:
+    ctx.set_source_rgba(*color, alpha)
     ctx.move_to(points[0, 0], points[0, 1])
     for px, py in points[1:]:
         ctx.line_to(px, py)
@@ -195,7 +233,7 @@ def draw_inner_shape(
     preset: Preset,
     size: int,
     center: tuple[float, float],
-    shape: Shape,
+    shape: Shape | CustomShape,
 ) -> None:
     """`Motion.rigid`'s replacement for `draw_flash`: a smaller, solid-filled,
     concentric copy of the outer shape instead of a soft radial-gradient
@@ -220,15 +258,23 @@ def draw_frame(
     preset: Preset,
     size: int,
     center: tuple[float, float],
-    shape: Shape = Shape.face,
+    shape: Shape | CustomShape = Shape.face,
     motion: Motion = Motion.deform,
     *,
     transparent_background: bool = False,
+    opacity: float = 0.0,
 ) -> None:
     if not transparent_background:
         bg = _hex_to_rgb01(preset.background_color)
         ctx.set_source_rgb(*bg)
         ctx.paint()
+
+    if motion == Motion.pulse:
+        # No flash, no bass/treble centroid color — the whole shape's alpha
+        # is the only reactive element in this mode.
+        outline_rgb = _hex_to_rgb01(preset.outline_color)
+        _fill_polygon(ctx, points, outline_rgb, opacity)
+        return
 
     if motion == Motion.rigid:
         outline_rgb = _hex_to_rgb01(preset.outline_color)
@@ -288,7 +334,7 @@ def render_frame(
     flash_color: tuple[float, float, float],
     preset: Preset,
     size: int,
-    shape: Shape = Shape.face,
+    shape: Shape | CustomShape = Shape.face,
     motion: Motion = Motion.deform,
     scale_value: float = 0.5,
     *,
@@ -308,7 +354,11 @@ def render_frame(
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
     ctx = cairo.Context(surface)
 
-    if motion == Motion.rigid:
+    opacity = 0.0
+    if motion == Motion.pulse:
+        points, centroid = pulse_polygon_points(size, shape, offset=offset)
+        opacity = preset.pulse_max_opacity * scale_value
+    elif motion == Motion.rigid:
         scale = 1.0 + preset.scale_amplitude * (scale_value - 0.5) * 2.0
         points, centroid = scaled_polygon_points(size, shape, scale, offset=offset)
     else:
@@ -318,7 +368,7 @@ def render_frame(
 
     draw_frame(
         ctx, points, flash_brightness, flash_color, preset, size, centroid, shape, motion,
-        transparent_background=transparent_background,
+        transparent_background=transparent_background, opacity=opacity,
     )
     if transparent_background:
         return surface_to_rgba_premultiplied(surface, w, h)
