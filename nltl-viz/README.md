@@ -1,6 +1,6 @@
 # nltl-viz
 
-A CLI tool for generating audio-reactive music visualization video clips from a short audio file. Fully generative — no image input. The outline of the chosen shape (the NLTL face, or NLTL space — its inverse) continuously deforms with the track's frequency content, and a flash fires on each detected onset, colored by the moment's spectral centroid.
+A CLI tool for generating audio-reactive music visualization video clips from a short audio file. Fully generative — no image input. The chosen shape (the NLTL face, or NLTL space — its inverse) reacts to the track according to its preset's motion style — see [Motion styles](#motion-styles) below.
 
 Point it at a video file instead of an audio file and it switches to overlay mode: the same visualization, transparent everywhere except the shape/flash, composited on top of the video using the video's own audio track for analysis.
 
@@ -36,15 +36,14 @@ nltl-viz --config nltl-viz.yaml --preset my-preset demo.wav
 # Render the inverse shape, NLTL space
 nltl-viz --shape space demo.wav
 
-# Rigid motion — perimeter stays in proportion, scales with overall loudness
-nltl-viz --motion rigid demo.wav
-
 # Overlay onto a video file instead — same flags, auto-detected by extension
 nltl-viz --preset aggressive performance.mp4
 
-# Interactive mode — prompts for audio file, preset, shape, and motion
+# Interactive mode — prompts for audio file, preset, and shape
 nltl-viz
 ```
+
+Motion (`deform`/`rigid`/`pulse`) isn't a flag — it comes from whichever preset you pick. Run `nltl-viz presets` to see each preset's motion.
 
 Output files are saved alongside the input file, named `{name}_viz_{timestamp}.mp4` for an audio input (or `{name}_viz_preview_{timestamp}.mp4` for `--preview`), and `{name}_viz-overlay_{timestamp}.mp4` for a video input (`{name}_viz-overlay_preview_{timestamp}.mp4` for `--preview`) — each render gets its own file so re-running with different settings never overwrites a previous output.
 
@@ -52,9 +51,8 @@ Output files are saved alongside the input file, named `{name}_viz_{timestamp}.m
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--preset`, `-p` | `industrial` | Visual preset |
+| `--preset`, `-p` | `industrial` | Visual preset — also determines motion (`deform`/`rigid`/`pulse`), see below |
 | `--shape` | `face` | Shape to visualize: `face` or `space` (its inverse) |
-| `--motion` | `deform` | Motion style: `deform` (perimeter distorts per frequency band) or `rigid` (perimeter stays in proportion, scales with overall loudness) |
 | `--preview` | `false` | Render a 10s low-quality preview to check the look |
 | `--output-dir`, `-o` | same as input | Where to write the output file |
 | `--config`, `-c` | — | YAML file with custom presets |
@@ -62,13 +60,14 @@ Output files are saved alongside the input file, named `{name}_viz_{timestamp}.m
 
 ## Presets
 
-| Name | Description |
-|------|--------------|
-| `industrial` | Moderate deform, medium onset sensitivity |
-| `subtle` | Calmer, slower breathing, lighter grain/vignette |
-| `aggressive` | Punchier deform and flash, faster attack, heavier grain/vignette |
+| Name | Motion | Description |
+|------|--------|--------------|
+| `industrial` | `deform` | Moderate deform, medium onset sensitivity |
+| `subtle` | `deform` | Calmer, slower breathing, lighter grain/vignette |
+| `3d-glasses` | `deform` | Red bass color, cyan treble color, light background, dark outline |
+| `aggressive` | `deform` | Punchier deform and flash, faster attack, heavier grain/vignette |
 
-Run `nltl-viz presets` to list them.
+Run `nltl-viz presets` to list them (with their motion). A preset's own `motion` field is what a `--config` YAML entry uses to select `deform`/`rigid`/`pulse` — see `nltl-viz.yaml.example`.
 
 ## Custom Presets
 
@@ -81,13 +80,16 @@ Copy `nltl-viz.yaml.example` to `nltl-viz.yaml` and edit the values — see that
 
 ## Motion styles
 
-- `deform` (default) — the chosen shape's perimeter is divided into 32 frequency bands, distributed proportionally to each edge's actual length (so the long edges get more control points than the short ones), smoothed frame-to-frame with an attack/release envelope so the shape breathes rather than vibrates, and interpolated into one continuous deformed outline. The shape deforms outward/inward from its own centroid, not the canvas center, so it stays recognizable as it moves.
+Motion isn't a flag — each preset's `motion` field fixes which one it uses (see `nltl-viz presets`).
+
+- `deform` — the chosen shape's perimeter is divided into 32 frequency bands, distributed proportionally to each edge's actual length (so the long edges get more control points than the short ones), smoothed frame-to-frame with an attack/release envelope so the shape breathes rather than vibrates, and interpolated into one continuous deformed outline. The shape deforms outward/inward from its own centroid, not the canvas center, so it stays recognizable as it moves.
 - `rigid` — the shape's proportions never distort; instead the whole shape scales uniformly larger and smaller around its own centroid, driven by the track's overall loudness (an RMS envelope, smoothed the same way as the band energies). The outer shape is a solid flat fill instead of a stroked outline, and the reactive element is a smaller solid-filled concentric copy of the same shape instead of a soft gradient — flat, hard-edged regions throughout, no gradients.
+- `pulse` — the shape is drawn at a genuinely constant size and proportion (no deform, no scale animation), inscribed edge-to-edge in the frame's shorter dimension rather than `deform`/`rigid`'s smaller centered scale. The only reactive element is the fill's own opacity, driven directly by the same overall-loudness envelope `rigid` uses for scale — floor 0%, ceiling always below 100% (`pulse_max_opacity`). No flash, no bass/treble color blend — one flat color (`outline_color`) throughout.
 
 ## How it reacts to audio
 
-- Each detected onset (a "hit") triggers the reactive element (a soft gradient blob in `deform`, a smaller solid copy of the shape in `rigid`) with a fixed-duration decay; a harder hit is brighter/larger, but every flash fades at the same rate.
-- Its color is a live blend between two configurable colors, driven by the track's spectral centroid — bass-heavy moments skew toward `bass_color`, treble-heavy moments skew toward `treble_color`.
+- Each detected onset (a "hit") triggers the reactive element (a soft gradient blob in `deform`, a smaller solid copy of the shape in `rigid`) with a fixed-duration decay; a harder hit is brighter/larger, but every flash fades at the same rate. `pulse` has no onset-triggered flash at all.
+- Its color is a live blend between two configurable colors, driven by the track's spectral centroid — bass-heavy moments skew toward `bass_color`, treble-heavy moments skew toward `treble_color`. `pulse` uses neither — it's one flat `outline_color` throughout.
 - Grain and vignette are applied as a post-process over every frame (no image input, no desaturation pass — the palette is deliberately muted already).
 
 ## Video overlay
@@ -101,7 +103,7 @@ nltl-viz --preset aggressive performance.mp4
 What's different from audio-only mode:
 
 - The video's audio track is what gets analyzed (extracted to a temp WAV internally, then discarded) — there's no separate audio file to supply.
-- The canvas renders at the source video's own resolution rather than a fixed square, with the shape sized and centered off the frame's shorter dimension — a landscape 1920x1080 clip gets a centered square-proportioned shape, not a stretched one.
+- The canvas renders at the source video's own resolution rather than a fixed square, with the shape sized and centered off the frame's shorter dimension — a landscape 1920x1080 clip gets a centered square-proportioned shape, not a stretched one. (`pulse` in particular is designed for this: it fills that shorter dimension edge-to-edge, where `deform`/`rigid` stay at their smaller centered scale.)
 - Analysis, rendering, and encoding all run at the video's own probed frame rate (read via `ffprobe`), not a fixed 30fps, so viz frames line up 1:1 with video frames.
 - The shape/flash render fully opaque exactly as in audio-only mode; everything else is transparent, so the source video shows through untouched everywhere the shape isn't. Grain and vignette still run on every frame as in audio-only mode — including the transparent area — for one continuous texture across the whole composited frame rather than a hard dropoff at the shape's silhouette.
 - The output's audio is the source video's own audio track, copied through unchanged (no re-encode) rather than re-compressed.
@@ -125,7 +127,7 @@ Supporting modules: `preset.py`/`config.py` define and load the numeric fields (
 
 All audio reactivity is resolved once in `audio.py` before any frame is drawn — `render.py` only ever reads precomputed per-frame values, it does no audio analysis of its own:
 
-- Shape motion — `deform` reads per-band energy; `rigid` reads the RMS loudness envelope.
+- Shape motion — `deform` reads per-band energy; `rigid` and `pulse` both read the RMS loudness envelope (`rigid` for scale, `pulse` for fill opacity).
 - Flash brightness — reads onset strength/timing (decayed per frame, combined across overlapping onsets with an elementwise `max`).
 - Flash/gradient color — reads spectral centroid, blended between `bass_color` and `treble_color`.
 

@@ -7,9 +7,11 @@ from dataclasses import dataclass, fields
 class Preset:
     name: str
     description: str = ""
+    motion: str = "deform"  # one of Motion's values ("deform", "rigid", "pulse") — see render.Motion
     band_count: int = 32
     deform_amplitude: float = 0.0
     scale_amplitude: float = 0.0
+    pulse_max_opacity: float = 0.85
     smoothing_attack: float = 0.03
     smoothing_release: float = 0.25
     onset_sensitivity: float = 1.0
@@ -56,8 +58,8 @@ BUILTIN: dict[str, Preset] = {
         vignette_fraction=0.25,
     ),
     "3d-glasses": Preset(
-        name="subtle",
-        description="Calmer, slower breathing, lighter grain/vignette",
+        name="3d-glasses",
+        description="Red bass color, cyan treble color, light background, dark outline",
         deform_amplitude=0.15,
         smoothing_attack=0.060,
         smoothing_release=0.450,

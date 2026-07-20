@@ -45,9 +45,10 @@ app = typer.Typer(
         "Generate an audio-reactive NLTL face visualization from a music file, "
         "or — given a video file — overlay it with transparency onto that video, "
         "using the video's own audio track for analysis.\n\n"
-        "Usage: nltl-viz [AUDIO|VIDEO] [--preset NAME] [--shape face|space] "
-        "[--motion deform|rigid] [--preview] "
+        "Usage: nltl-viz [AUDIO|VIDEO] [--preset NAME] [--shape face|space] [--preview] "
         "[--output-dir DIR] [--config FILE] [--verbose]\n\n"
+        "Motion (deform/rigid/pulse) comes from the chosen preset, not a separate flag — "
+        "see `nltl-viz presets`.\n\n"
         "Run with no arguments for interactive mode (audio files only)."
     ),
 )
@@ -55,8 +56,9 @@ console = Console()
 
 
 def _frame_generator(
-    analysis: AudioAnalysis, preset_obj: Preset, size: int, shape: Shape, motion: Motion
+    analysis: AudioAnalysis, preset_obj: Preset, size: int, shape: Shape
 ) -> Iterable[np.ndarray]:
+    motion = Motion(preset_obj.motion)
     vignette_mask = postprocess.build_vignette_mask(size, size, preset_obj.vignette_fraction)
     rng = np.random.default_rng()
     for i in range(analysis.n_frames):
@@ -73,7 +75,7 @@ def _frame_generator(
 
 
 def _overlay_frame_generator(
-    analysis: AudioAnalysis, preset_obj: Preset, width: int, height: int, shape: Shape, motion: Motion
+    analysis: AudioAnalysis, preset_obj: Preset, width: int, height: int, shape: Shape
 ) -> Iterable[np.ndarray]:
     """Same per-frame render as `_frame_generator`, but on a transparent
     background sized to the source video's own resolution. Vignette is a
@@ -84,6 +86,7 @@ def _overlay_frame_generator(
     background leaks straight into the video underneath, giving the whole
     composited frame one continuous grain texture instead of an abrupt
     dropoff in texture right at the shape's silhouette."""
+    motion = Motion(preset_obj.motion)
     size = min(width, height)
     vignette_mask = postprocess.build_vignette_mask(width, height, preset_obj.vignette_fraction)
     rng = np.random.default_rng()
@@ -106,7 +109,6 @@ def run_render(
     audio_path: Path,
     preset_name: str,
     shape: Shape,
-    motion: Motion,
     output_dir: Optional[Path],
     config_path: Optional[Path],
     preview: bool,
@@ -117,7 +119,7 @@ def run_render(
     console.print()
     console.print(f"[bold]Preset[/bold]    {resolved_preset.name} — {resolved_preset.description}")
     console.print(f"[bold]Shape[/bold]     {shape.value}")
-    console.print(f"[bold]Motion[/bold]    {motion.value}")
+    console.print(f"[bold]Motion[/bold]    {resolved_preset.motion}")
     if preview:
         console.print("[bold]Preview[/bold]   10s low-quality render")
 
@@ -135,7 +137,7 @@ def run_render(
     console.print(f"[bold]Output[/bold]    {output_path}")
     console.print()
 
-    frames = _frame_generator(analysis, resolved_preset, SIZE, shape, motion)
+    frames = _frame_generator(analysis, resolved_preset, SIZE, shape)
     cmd = encode.build_ffmpeg_cmd(audio_path, output_path, SIZE, SIZE, FPS, duration_sec, preview)
     encode.render_video(frames, cmd=cmd, total_frames=total_frames, preview=preview, verbose=verbose)
     console.print(f"[green]Done[/green] → {output_path}")
@@ -145,7 +147,6 @@ def run_overlay(
     video_path: Path,
     preset_name: str,
     shape: Shape,
-    motion: Motion,
     output_dir: Optional[Path],
     config_path: Optional[Path],
     preview: bool,
@@ -157,7 +158,7 @@ def run_overlay(
     console.print()
     console.print(f"[bold]Preset[/bold]    {resolved_preset.name} — {resolved_preset.description}")
     console.print(f"[bold]Shape[/bold]     {shape.value}")
-    console.print(f"[bold]Motion[/bold]    {motion.value}")
+    console.print(f"[bold]Motion[/bold]    {resolved_preset.motion}")
     console.print(f"[bold]Overlay[/bold]   {probe.width}x{probe.height} @ {probe.fps_rational}fps")
     if preview:
         console.print("[bold]Preview[/bold]   10s low-quality render")
@@ -180,7 +181,7 @@ def run_overlay(
     console.print(f"[bold]Output[/bold]    {output_path}")
     console.print()
 
-    viz_frames = _overlay_frame_generator(analysis, resolved_preset, probe.width, probe.height, shape, motion)
+    viz_frames = _overlay_frame_generator(analysis, resolved_preset, probe.width, probe.height, shape)
     video_frames = video_mod.decode_frames(video_path, probe.width, probe.height, total_frames)
     composited = (
         video_mod.composite_over(video_frame, viz_frame)
@@ -201,7 +202,6 @@ def _run_interactive() -> None:
             choices.audio_path,
             choices.preset_name,
             Shape(choices.shape),
-            Motion(choices.motion),
             None,
             None,
             False,
@@ -231,11 +231,8 @@ def render_cmd(
     input_path: Optional[Path] = typer.Argument(
         None, help="Path to the input audio file, or a video file to overlay the visualization onto"
     ),
-    preset: str = typer.Option("industrial", "--preset", "-p", help="Visual preset"),
+    preset: str = typer.Option("industrial", "--preset", "-p", help="Visual preset (also determines motion)"),
     shape: Shape = typer.Option(Shape.face, "--shape", help="Shape to visualize: face or space"),
-    motion: Motion = typer.Option(
-        Motion.deform, "--motion", help="Motion style: deform (per-band outline push) or rigid (uniform scale)"
-    ),
     preview: bool = typer.Option(False, "--preview", help="Render a 10s low-quality preview"),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory"),
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="YAML file with custom presets"),
@@ -249,9 +246,9 @@ def render_cmd(
 
     try:
         if video_mod.is_video_file(input_path):
-            run_overlay(input_path, preset, shape, motion, output_dir, config_path, preview, verbose)
+            run_overlay(input_path, preset, shape, output_dir, config_path, preview, verbose)
         else:
-            run_render(input_path, preset, shape, motion, output_dir, config_path, preview, verbose)
+            run_render(input_path, preset, shape, output_dir, config_path, preview, verbose)
     except Exception as exc:  # surface any failure as a clean CLI error, not a traceback
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -262,10 +259,11 @@ def presets_cmd() -> None:
     """List available built-in presets."""
     table = Table(title="Built-in presets")
     table.add_column("Name", style="bold")
+    table.add_column("Motion")
     table.add_column("Description")
     for name in preset_mod.names():
         p = preset_mod.get(name)
-        table.add_row(name, p.description)
+        table.add_row(name, p.motion, p.description)
     console.print(table)
 
 
